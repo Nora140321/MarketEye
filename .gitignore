@@ -1,0 +1,8 @@
+.env
+/database/*.db
+/models/*.h5
+/reports/*.pdf
+/data/processed_*.csv
+.venv/
+__pycache__/
+*.pyc
