@@ -6,3 +6,5 @@
 .venv/
 __pycache__/
 *.pyc
+data/*_historical_data.csv
+World-Stock-Prices-Dataset.csv
