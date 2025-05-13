@@ -136,37 +136,43 @@ def generate_recommendation(ticker, current_price, avg_close, recent_volatility,
     # Recommendation logic with normal, conversational language
     if current_rsi < 30 and price_trend < 0 and abs(current_price - support_level) / support_level < 0.05:
         return (
-            f"Based on the analysis for {ticker}, it looks like a good time to consider buying. "
-            f"The stock is currently at <span class='highlight-number'>${current_price:.2f}</span>, which is close to its support level of <span class='highlight-number'>${support_level:.2f}</span>. "
-            f"The RSI is at <span class='highlight-number'>{current_rsi:.2f}</span>, indicating it might be oversold, and the recent price trend shows a decline of <span class='highlight-number'>{price_trend:.2f}%</span>. "
+            f"Based on the analysis for {ticker}, it looks like a good time to consider buying.\n"
+            f"- Current price: ${current_price:.2f}, close to its support level of ${support_level:.2f}\n"
+            f"- RSI: {current_rsi:.2f}, indicating it might be oversold\n"
+            f"- Recent price trend: a decline of {price_trend:.2f}%\n"
             f"This suggests the stock could be nearing a rebound."
         )
     elif current_rsi > 70 and price_trend > 0 and abs(current_price - resistance_level) / resistance_level < 0.05:
         return (
-            f"For {ticker}, it might be a good time to think about selling. "
-            f"The stock is currently at <span class='highlight-number'>${current_price:.2f}</span>, near its resistance level of <span class='highlight-number'>${resistance_level:.2f}</span>. "
-            f"The RSI is at <span class='highlight-number'>{current_rsi:.2f}</span>, suggesting it may be overbought, and the price has been trending up by <span class='highlight-number'>{price_trend:.2f}%</span>. "
+            f"For {ticker}, it might be a good time to think about selling.\n"
+            f"- Current price: ${current_price:.2f}, near its resistance level of ${resistance_level:.2f}\n"
+            f"- RSI: {current_rsi:.2f}, suggesting it may be overbought\n"
+            f"- Price trend: up by {price_trend:.2f}%\n"
             f"This could indicate a potential pullback soon."
         )
     elif current_rsi < 40 and price_trend < 0:
         return (
-            f"For {ticker}, you might want to keep an eye on buying opportunities. "
-            f"The stock is at <span class='highlight-number'>${current_price:.2f}</span>, with an RSI of <span class='highlight-number'>{current_rsi:.2f}</span>, which is approaching oversold territory. "
-            f"The price has been trending down by <span class='highlight-number'>{price_trend:.2f}%</span>, suggesting it might be close to a bottom. "
-            f"Consider watching for a dip near the support level of <span class='highlight-number'>${support_level:.2f}</span>."
+            f"For {ticker}, you might want to keep an eye on buying opportunities.\n"
+            f"- Current price: ${current_price:.2f}\n"
+            f"- RSI: {current_rsi:.2f}, approaching oversold territory\n"
+            f"- Price trend: down by {price_trend:.2f}%\n"
+            f"Consider watching for a dip near the support level of ${support_level:.2f}."
         )
     elif current_rsi > 60 and price_trend > 0:
         return (
-            f"For {ticker}, you might want to monitor for selling opportunities. "
-            f"The stock is at <span class='highlight-number'>${current_price:.2f}</span>, with an RSI of <span class='highlight-number'>{current_rsi:.2f}</span>, which is nearing overbought levels. "
-            f"The price has been trending up by <span class='highlight-number'>{price_trend:.2f}%</span>, showing good momentum. "
-            f"Keep an eye on the resistance level of <span class='highlight-number'>${resistance_level:.2f}</span> for a potential exit point."
+            f"For {ticker}, you might want to monitor for selling opportunities.\n"
+            f"- Current price: ${current_price:.2f}\n"
+            f"- RSI: {current_rsi:.2f}, nearing overbought levels\n"
+            f"- Price trend: up by {price_trend:.2f}%\n"
+            f"Keep an eye on the resistance level of ${resistance_level:.2f} for a potential exit point."
         )
     else:
         return (
-            f"For {ticker}, the current outlook is neutral. "
-            f"The stock is at <span class='highlight-number'>${current_price:.2f}</span>, with an RSI of <span class='highlight-number'>{current_rsi:.2f}</span> and a trend of <span class='highlight-number'>{price_trend:.2f}%</span>. "
-            f"It’s positioned between its support at <span class='highlight-number'>${support_level:.2f}</span> and resistance at <span class='highlight-number'>${resistance_level:.2f}</span>. "
+            f"For {ticker}, the current outlook is neutral.\n"
+            f"- Current price: ${current_price:.2f}\n"
+            f"- RSI: {current_rsi:.2f}\n"
+            f"- Price trend: {price_trend:.2f}%\n"
+            f"- Positioned between support at ${support_level:.2f} and resistance at ${resistance_level:.2f}\n"
             f"Since there are no strong buy or sell signals, holding might be the best approach for now."
         )
 
@@ -237,9 +243,7 @@ def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, 
 
     # Recommendation
     elements.append(Paragraph("Recommendation", heading_style))
-    # Remove HTML tags for PDF
-    recommendation_text = recommendation.replace("<span class='highlight-number'>", "").replace("</span>", "")
-    elements.append(Paragraph(recommendation_text, normal_style))
+    elements.append(Paragraph(recommendation, normal_style))
     elements.append(Spacer(1, 12))
 
     # Forecast Data
@@ -558,7 +562,7 @@ def show_dashboard():
     if not df.empty:
         # Use the metrics calculated above
         recommendation = generate_recommendation(ticker, current_price, avg_close, recent_volatility, current_rsi, price_trend, support_level, resistance_level)
-        st.markdown(recommendation, unsafe_allow_html=True)
+        st.markdown(recommendation)
     else:
         st.write("No historical data available for generating a recommendation.")
         recommendation = "No recommendation available due to lack of historical data."
