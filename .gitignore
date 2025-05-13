@@ -1,10 +1,35 @@
+# Environment files with sensitive data
 .env
+
+# Database files
 /database/*.db
+
+# Machine learning model files
 /models/*.h5
+
+# Generated reports
 /reports/*.pdf
+/report_templates/
+
+# Data files
 /data/processed_*.csv
+/data/*_historical_data.csv
+/forecasts/
+World-Stock-Prices-Dataset.csv
+
+# Python virtual environment
 .venv/
+
+# Python cache and build files
 __pycache__/
 *.pyc
-data/*_historical_data.csv
-World-Stock-Prices-Dataset.csv
+*.pyo
+*.pyd
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# Temporary files
+*.log
+*.tmp
