@@ -16,3 +16,4 @@ langchain-core==0.1.52
 chromadb==0.4.24
 langchain-cohere==0.1.5
 yfinance==0.2.60
+tensorflow==2.17.0
