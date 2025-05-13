@@ -1,18 +1,20 @@
 import sys
 import os
 from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)  # Suppress deprecation warnings
 
 # Add the parent directory to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../agents')))
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
 from backend.auth import register_user, login_user, log_action
-import collect_stock_data  # Import the collect_stock_data script as a module
-import train_lstm_model   # Import the train_lstm_model script as a module
+from agents.stock_analysis_agents import run_stock_analysis_crew  # Import the CrewAI workflow
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
@@ -25,8 +27,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 # Set page layout to wide for better visibility
 st.set_page_config(layout="wide")
 
-# List of tickers
-TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA"]
+# List of tickers (expanded to include Finance and Sportswear)
+TICKERS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "JPM", "NKE"]
 
 # Define directories
 FORECASTS_DIR = r"C:\Users\algha\OneDrive\Documents\Market_Eye\forecasts"
@@ -86,8 +88,8 @@ st.markdown(
     }
     /* Custom styling for highlighted numbers and currency */
     .highlight-number {
-        font-size: 1.8em;
-        color: #1E90FF; /* Blue color for numbers and currency */
+        font-size: 1.2em; /* Reduced size for normal font */
+        color: #FF4B4B; /* Red color for numbers */
     }
     /* Welcome message styling */
     .welcome-container {
@@ -111,6 +113,11 @@ st.markdown(
     .main-heading {
         margin-top: 60px; /* Add space below the welcome message */
     }
+    /* Table styling for historical summary */
+    .historical-summary-table td {
+        padding: 5px;
+        color: #E0E0E0;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -118,8 +125,9 @@ st.markdown(
 
 # Function to calculate historical volatility
 def calculate_volatility(df, window=60):
-    returns = df['close'].pct_change().dropna()
+    returns = df['close'].pct_change().fillna(0)  # Fill NaN with 0 to avoid issues
     volatility = returns.rolling(window=window).std() * np.sqrt(252)  # Annualized volatility
+    volatility = volatility.fillna(0)  # Fill any remaining NaN with 0
     return volatility
 
 # Function to calculate 14-day RSI
@@ -129,54 +137,10 @@ def calculate_rsi(df, periods=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.fillna(0)  # Fill NaN with 0 to avoid issues
     return rsi
 
-# Function to generate a recommendation with normal, conversational language
-def generate_recommendation(ticker, current_price, avg_close, recent_volatility, current_rsi, price_trend, support_level, resistance_level):
-    # Recommendation logic with normal, conversational language
-    if current_rsi < 30 and price_trend < 0 and abs(current_price - support_level) / support_level < 0.05:
-        return (
-            f"Based on the analysis for {ticker}, it looks like a good time to consider buying.\n"
-            f"- Current price: ${current_price:.2f}, close to its support level of ${support_level:.2f}\n"
-            f"- RSI: {current_rsi:.2f}, indicating it might be oversold\n"
-            f"- Recent price trend: a decline of {price_trend:.2f}%\n"
-            f"This suggests the stock could be nearing a rebound."
-        )
-    elif current_rsi > 70 and price_trend > 0 and abs(current_price - resistance_level) / resistance_level < 0.05:
-        return (
-            f"For {ticker}, it might be a good time to think about selling.\n"
-            f"- Current price: ${current_price:.2f}, near its resistance level of ${resistance_level:.2f}\n"
-            f"- RSI: {current_rsi:.2f}, suggesting it may be overbought\n"
-            f"- Price trend: up by {price_trend:.2f}%\n"
-            f"This could indicate a potential pullback soon."
-        )
-    elif current_rsi < 40 and price_trend < 0:
-        return (
-            f"For {ticker}, you might want to keep an eye on buying opportunities.\n"
-            f"- Current price: ${current_price:.2f}\n"
-            f"- RSI: {current_rsi:.2f}, approaching oversold territory\n"
-            f"- Price trend: down by {price_trend:.2f}%\n"
-            f"Consider watching for a dip near the support level of ${support_level:.2f}."
-        )
-    elif current_rsi > 60 and price_trend > 0:
-        return (
-            f"For {ticker}, you might want to monitor for selling opportunities.\n"
-            f"- Current price: ${current_price:.2f}\n"
-            f"- RSI: {current_rsi:.2f}, nearing overbought levels\n"
-            f"- Price trend: up by {price_trend:.2f}%\n"
-            f"Keep an eye on the resistance level of ${resistance_level:.2f} for a potential exit point."
-        )
-    else:
-        return (
-            f"For {ticker}, the current outlook is neutral.\n"
-            f"- Current price: ${current_price:.2f}\n"
-            f"- RSI: {current_rsi:.2f}\n"
-            f"- Price trend: {price_trend:.2f}%\n"
-            f"- Positioned between support at ${support_level:.2f} and resistance at ${resistance_level:.2f}\n"
-            f"Since there are no strong buy or sell signals, holding might be the best approach for now."
-        )
-
-# Function to generate a PDF report
+# Function to generate a PDF report (Updated: Removed Error Metrics Section)
 def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, forecast_df):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -200,13 +164,11 @@ def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, 
 
     # Historical Stock Data
     elements.append(Paragraph("Historical Stock Data (Last 60 Days)", heading_style))
-    # Validate that historical_df has the required columns
     required_columns = ['date', 'close', 'volume']
     if not all(col in historical_df.columns for col in required_columns):
-        elements.append(Paragraph("Error: Historical data is missing required columns.", normal_style))
+        elements.append(Paragraph(f"Error: Historical data is missing required columns. Available columns: {historical_df.columns.tolist()}", normal_style))
     else:
         historical_data = historical_df.tail(60)[required_columns].copy()
-        # Ensure date is a datetime object
         historical_data['date'] = pd.to_datetime(historical_data['date'])
         historical_data['date'] = historical_data['date'].apply(lambda x: x.strftime("%d-%m-%Y %I %p").replace("AM", "am").replace("PM", "pm"))
         historical_data = historical_data.round({'close': 3, 'volume': 3})
@@ -235,9 +197,15 @@ def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, 
             f"- Recent Volatility (Last 60 Days, Annualized): {summary_metrics['recent_volatility']:.2f}\n"
             f"- Current RSI (14-Day): {summary_metrics['current_rsi']:.2f}\n"
             f"- Price Trend (Last 30 Days): {summary_metrics['price_trend']:.2f}%\n"
+            f"- 2020 Growth Percentage: {summary_metrics['growth_2020']:.2f}%\n"
             f"- Support Level (Last 60 Days): ${summary_metrics['support_level']:.2f}\n"
-            f"- Resistance Level (Last 60 Days): ${summary_metrics['resistance_level']:.2f}"
+            f"- Resistance Level (Last 60 Days): ${summary_metrics['resistance_level']:.2f}\n"
         )
+        annual_growth = summary_metrics.get('annual_growth', {})
+        if annual_growth:
+            summary_text += "- Annual Growth (Year-over-Year):\n"
+            for year, growth in annual_growth.items():
+                summary_text += f"  - {year}: {growth:.2f}%\n"
         elements.append(Paragraph(summary_text, normal_style))
     elements.append(Spacer(1, 12))
 
@@ -251,13 +219,11 @@ def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, 
     if forecast_df.empty:
         elements.append(Paragraph("Error: Forecast data is missing.", normal_style))
     else:
-        # Validate that forecast_df has the required columns
         forecast_required_columns = ['date', 'forecasted_close']
         if not all(col in forecast_df.columns for col in forecast_required_columns):
             elements.append(Paragraph("Error: Forecast data is missing required columns.", normal_style))
         else:
             forecast_data = forecast_df[forecast_required_columns].copy()
-            # Ensure date is a datetime object
             forecast_data['date'] = pd.to_datetime(forecast_data['date'])
             forecast_data['date'] = forecast_data['date'].apply(lambda x: x.strftime("%d-%m-%Y %I %p").replace("AM", "am").replace("PM", "pm"))
             forecast_data = forecast_data.round({'forecasted_close': 3})
@@ -274,6 +240,45 @@ def generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, 
                 ('GRID', (0, 0), (-1, -1), 1, colors.black)
             ]))
             elements.append(table)
+    elements.append(Spacer(1, 12))
+
+    # Forecast vs. Real Data Comparison
+    elements.append(Paragraph("Forecast vs. Real Data Comparison (January 5-31, 2025)", heading_style))
+    if not all(col in historical_df.columns for col in ['date', 'close']):
+        elements.append(Paragraph(f"Error: Historical data is missing required columns for comparison. Available columns: {historical_df.columns.tolist()}", normal_style))
+    elif forecast_df.empty or not all(col in forecast_df.columns for col in ['date', 'forecasted_close']):
+        elements.append(Paragraph("Error: Forecast data is missing or lacks required columns.", normal_style))
+    else:
+        # Ensure both date columns are datetime and timezone-aware
+        historical_df = historical_df.copy()
+        forecast_df = forecast_df.copy()
+        historical_df['date'] = pd.to_datetime(historical_df['date'], utc=True)
+        forecast_df['date'] = pd.to_datetime(forecast_df['date'], utc=True)
+        comparison_df = pd.merge(
+            historical_df[['date', 'close']],
+            forecast_df[['date', 'forecasted_close']],
+            on='date',
+            how='inner'
+        )
+        if comparison_df.empty:
+            elements.append(Paragraph("Error: No overlapping dates for forecast vs. real data comparison.", normal_style))
+        else:
+            comparison_df['date'] = comparison_df['date'].apply(lambda x: x.strftime("%d-%m-%Y %I %p").replace("AM", "am").replace("PM", "pm"))
+            comparison_df = comparison_df.round({'close': 3, 'forecasted_close': 3})
+            data = [['Date', 'Actual Close', 'Forecasted Close']] + comparison_df.values.tolist()
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            elements.append(table)
+    elements.append(Spacer(1, 12))
 
     # Build the PDF
     doc.build(elements)
@@ -312,10 +317,15 @@ def show_dashboard():
     # Collect Stock Data
     st.header("Collect Stock Data")
     if st.button("Collect Stock Data"):
-        with st.spinner("Collecting stock data..."):
+        with st.spinner("Collecting stock data using CrewAI..."):
             try:
-                collect_stock_data.main()
-                log_action(st.session_state.user_id, "Collected stock data")
+                # Run the CrewAI workflow to collect and process data
+                result = run_stock_analysis_crew()
+                if result is None:
+                    st.error("CrewAI failed to collect or process data.")
+                    return
+
+                log_action(st.session_state.user_id, "Collected stock data using CrewAI")
                 st.success("Stock data collected successfully!")
 
                 # Load and display the collected data for all tickers
@@ -336,25 +346,24 @@ def show_dashboard():
                     combined_data = combined_data.round({'open': 3, 'high': 3, 'low': 3, 'close': 3, 'volume': 3})
 
                     # Display only the required columns (excluding ticker)
-                    display_cols = ['date', 'open', 'high', 'low', 'close', 'volume']
+                    display_cols = ['date', 'open', 'high', 'low', 'close', "volume"]
                     st.dataframe(combined_data[display_cols], use_container_width=True)
                 else:
                     st.warning("No collected data available to display.")
             except Exception as e:
-                st.error(f"Error collecting stock data: {e}")
+                st.error(f"Error collecting stock data with CrewAI: {e}")
 
     # Training and Forecasting (Automatic)
     st.header("Train Model and Generate Forecasts")
-    with st.spinner(f"Training model and generating forecasts for {ticker}..."):
+    with st.spinner(f"Checking forecasts for {ticker}..."):
         if not st.session_state.training_done:
-            try:
-                train_lstm_model.train_lstm_model(ticker)
-                train_lstm_model.forecast_january_2025(ticker)
-                log_action(st.session_state.user_id, f"Trained model and forecasted for {ticker}")
-                st.success(f"Training and forecasting completed successfully for {ticker}!")
-                st.session_state.training_done = True  # Prevent retraining on rerun
-            except Exception as e:
-                st.error(f"Error during training/forecasting: {e}")
+            file_path = os.path.join(FORECASTS_DIR, f"{ticker}_jan2025_forecast.csv")
+            if os.path.exists(file_path):
+                log_action(st.session_state.user_id, f"Forecasts already generated for {ticker} by CrewAI")
+                st.success(f"Forecasts already generated for {ticker}!")
+                st.session_state.training_done = True
+            else:
+                st.warning(f"No forecast data found for {ticker}. Ensure 'Collect Stock Data' has been run using CrewAI.")
                 st.session_state.training_done = False
 
     # Historical Stock Data and Analysis (Using Local Data)
@@ -362,6 +371,7 @@ def show_dashboard():
     file_path = os.path.join(DATA_DIR, f"{ticker}_stock_data.csv")
     if os.path.exists(file_path):
         df = pd.read_csv(file_path)
+        print(f"Loaded data for {ticker}. Columns: {df.columns.tolist()}")
         df["date"] = pd.to_datetime(df["date"])
         
         # Log app usage
@@ -391,7 +401,7 @@ def show_dashboard():
 
     # Candlestick Chart (Moved Below Table)
     st.subheader(f"Candlestick Chart for {ticker}")
-    if not df.empty:
+    if not df.empty and all(col in df.columns for col in ['date', 'open', 'high', 'low', 'close']):
         # Overall Trend Candlestick Chart
         st.markdown("**Overall Trend**")
         st.markdown("**Explanation:** This chart shows the stock's price movements over its entire history using candlesticks. Each candlestick represents a trading day, with the body showing the opening and closing prices, and the wicks showing the high and low prices for that day.")
@@ -455,33 +465,36 @@ def show_dashboard():
                 current_idx += num_points
 
         # Create the combined candlestick chart
-        fig_yearly.add_trace(go.Candlestick(
-            x=x_data,
-            open=open_data,
-            high=high_data,
-            low=low_data,
-            close=close_data,
-            name="Candlestick",
-            increasing_line_color=colors[0 % len(colors)],
-            decreasing_line_color=colors[1 % len(colors)]
-        ))
+        if x_data:
+            fig_yearly.add_trace(go.Candlestick(
+                x=x_data,
+                open=open_data,
+                high=high_data,
+                low=low_data,
+                close=close_data,
+                name="Candlestick",
+                increasing_line_color=colors[0 % len(colors)],
+                decreasing_line_color=colors[1 % len(colors)]
+            ))
 
-        # Update layout to show year on x-axis (but keep the explanation context)
-        fig_yearly.update_layout(
-            title=f"{ticker} Yearly Candlestick Chart",
-            yaxis_title="Price",
-            xaxis_title="Year",
-            template="plotly_dark",
-            xaxis=dict(
-                tickvals=[x_data[year_labels.index(year)] for year in years if year in year_labels],
-                ticktext=years,
-                showticklabels=True,
-                tickmode='array'
+            # Update layout to show year on x-axis
+            fig_yearly.update_layout(
+                title=f"{ticker} Yearly Candlestick Chart",
+                yaxis_title="Price",
+                xaxis_title="Year",
+                template="plotly_dark",
+                xaxis=dict(
+                    tickvals=[x_data[year_labels.index(year)] for year in years if year in year_labels],
+                    ticktext=years,
+                    showticklabels=True,
+                    tickmode='array'
+                )
             )
-        )
-        st.plotly_chart(fig_yearly, use_container_width=True)
+            st.plotly_chart(fig_yearly, use_container_width=True)
+        else:
+            st.write("Insufficient data to plot yearly trends.")
     else:
-        st.write("No data available to plot.")
+        st.write("No data available to plot or missing required columns.")
 
     # Additional Historical Analysis
     st.subheader(f"Historical Analysis for {ticker}")
@@ -493,16 +506,20 @@ def show_dashboard():
     Higher volatility indicates larger price swings, suggesting greater risk but also potential for higher returns. Lower volatility implies more stable price movements, often associated with lower risk.
     """)
     st.markdown("**Explanation:** This graph shows the annualized volatility over a 60-day rolling window. It helps identify periods of high or low price fluctuation, which can indicate market uncertainty or stability.")
-    if not df.empty and 'volatility' in df.columns:
-        volatility_df = df[['date', 'volatility']].dropna()
-        fig = px.line(volatility_df, x='date', y='volatility', title="Annualized Volatility (60-day)")
-        fig.update_layout(template="plotly_dark")
-        fig.update_xaxes(tickformat="%d-%m-%Y")  # Show full date
-        st.plotly_chart(fig)
+    if not df.empty and 'volatility' in df.columns and len(df) >= 60:
+        volatility_df = df[['date', 'volatility']].copy()
+        volatility_df['volatility'] = volatility_df['volatility'].fillna(0)  # Fill NaN with 0
+        if volatility_df['volatility'].sum() > 0:  # Check if there are non-zero volatility values
+            fig = px.line(volatility_df, x='date', y='volatility', title="Annualized Volatility (60-day)")
+            fig.update_layout(template="plotly_dark")
+            fig.update_xaxes(tickformat="%d-%m-%Y")  # Show full date
+            st.plotly_chart(fig)
+        else:
+            st.write("Volatility data is zero or insufficient to plot (requires at least 60 days).")
     else:
-        st.write("No volatility data available to plot.")
+        st.write("No volatility data available to plot or insufficient data (requires at least 60 days).")
 
-    # RSI chart (Moved Below Volatility)
+    # RSI chart
     st.subheader("14-Day RSI")
     st.markdown("""
     **What is RSI?** The Relative Strength Index (RSI) is a momentum indicator that measures the speed and change of price movements on a scale of 0 to 100. 
@@ -510,18 +527,21 @@ def show_dashboard():
     Values between 30 and 70 indicate neutral momentum.
     """)
     st.markdown("**Explanation:** This graph displays the 14-day RSI, helping you identify whether the stock is overbought (above 70) or oversold (below 30), which can signal potential buying or selling opportunities.")
-    if not df.empty and 'rsi' in df.columns:
+    if not df.empty and 'rsi' in df.columns and len(df) >= 14:
         rsi_df = df[['date', 'rsi']].dropna()
-        fig = px.line(rsi_df, x='date', y='rsi', title="14-Day RSI")
-        fig.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
-        fig.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
-        fig.update_layout(template="plotly_dark")
-        fig.update_xaxes(tickformat="%d-%m-%Y")  # Show full date
-        st.plotly_chart(fig)
+        if not rsi_df.empty:
+            fig = px.line(rsi_df, x='date', y='rsi', title="14-Day RSI")
+            fig.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
+            fig.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
+            fig.update_layout(template="plotly_dark")
+            fig.update_xaxes(tickformat="%d-%m-%Y")  # Show full date
+            st.plotly_chart(fig)
+        else:
+            st.write("No RSI data available to plot (insufficient data points).")
     else:
-        st.write("No RSI data available to plot.")
+        st.write("No RSI data available to plot or insufficient data (requires at least 14 days).")
 
-    # Historical Summary with Key Metrics
+    # Historical Summary
     st.subheader("Historical Summary")
     if not df.empty:
         # Calculate key metrics
@@ -532,7 +552,21 @@ def show_dashboard():
         price_trend = ((recent_df['close'].iloc[-1] - recent_df['close'].iloc[-30]) / recent_df['close'].iloc[-30]) * 100 if len(recent_df) >= 30 else 0
         support_level = recent_df['close'].min()
         resistance_level = recent_df['close'].max()
-        current_price = recent_df['close'].iloc[-1]
+
+        # Load 2020 growth% and annual growth from CrewAI analytics
+        analytics_file = os.path.join(FORECASTS_DIR, "analytics_and_forecasts.json")
+        growth_2020 = 0
+        annual_growth = {}
+        if os.path.exists(analytics_file):
+            try:
+                with open(analytics_file, 'r') as f:
+                    import json
+                    analytics_data = json.load(f)
+                if 'analytics' in analytics_data and ticker in analytics_data['analytics']:
+                    growth_2020 = analytics_data['analytics'][ticker]['growth_2020']
+                    annual_growth = analytics_data['analytics'][ticker].get('annual_growth', {})
+            except Exception as e:
+                st.warning(f"Could not load analytics for {ticker}: {e}")
 
         # Store metrics for PDF report
         summary_metrics = {
@@ -541,30 +575,85 @@ def show_dashboard():
             'current_rsi': current_rsi,
             'price_trend': price_trend,
             'support_level': support_level,
-            'resistance_level': resistance_level
+            'resistance_level': resistance_level,
+            'growth_2020': growth_2020,
+            'annual_growth': annual_growth
         }
 
-        # Display summary in bullet points with highlighted numbers
-        st.markdown(f"""
-        - Average Closing Price (Last 60 Days): <span class='highlight-number'>${avg_close:.2f}</span>
-        - Recent Volatility (Last 60 Days, Annualized): <span class='highlight-number'>{recent_volatility:.2f}</span> (Higher values indicate greater price fluctuation)
-        - Current RSI (14-Day): <span class='highlight-number'>{current_rsi:.2f}</span> (Above 70: Overbought, Below 30: Oversold)
-        - Price Trend (Last 30 Days): <span class='highlight-number'>{price_trend:.2f}%</span> ({'Uptrend' if price_trend > 0 else 'Downtrend'})
-        - Support Level (Last 60 Days): <span class='highlight-number'>${support_level:.2f}</span> (Potential price floor)
-        - Resistance Level (Last 60 Days): <span class='highlight-number'>${resistance_level:.2f}</span> (Potential price ceiling)
-        """, unsafe_allow_html=True)
+        # Simple explanation
+        st.markdown("This section provides a summary of key metrics for the stock over the last 60 days, including its average price, volatility, RSI, and growth trends over the years.")
+
+        # Display summary as a table
+        summary_data = [
+            ["Metric", "Value"],
+            ["Average Closing Price (Last 60 Days)", f"${avg_close:.2f}"],
+            ["Recent Volatility (Last 60 Days, Annualized)", f"{recent_volatility:.2f}"],
+            ["Current RSI (14-Day)", f"{current_rsi:.2f}"],
+            ["Price Trend (Last 30 Days)", f"{price_trend:.2f}%"],
+            ["2020 Growth Percentage", f"{growth_2020:.2f}%"],
+            ["Support Level (Last 60 Days)", f"${support_level:.2f}"],
+            ["Resistance Level (Last 60 Days)", f"${resistance_level:.2f}"]
+        ]
+        summary_df = pd.DataFrame(summary_data[1:], columns=summary_data[0])
+        st.table(summary_df)
+
+        # Annual Growth Over Time (Graph)
+        st.subheader("Annual Growth Over Time")
+        st.markdown("This graph shows the year-over-year growth percentage for each year, helping you understand the stock's historical performance trends over time.")
+        if annual_growth:
+            annual_growth_df = pd.DataFrame(
+                list(annual_growth.items()),
+                columns=['Year', 'Growth (%)']
+            )
+            annual_growth_df['Year'] = annual_growth_df['Year'].astype(int)
+            annual_growth_df = annual_growth_df.sort_values('Year')
+            
+            fig = px.line(
+                annual_growth_df,
+                x='Year',
+                y='Growth (%)',
+                title=f"Annual Growth Over Time for {ticker}",
+                template="plotly_dark",
+                markers=True
+            )
+            fig.update_xaxes(tickvals=annual_growth_df['Year'])
+            st.plotly_chart(fig)
+        else:
+            st.write("No annual growth data available to plot.")
     else:
         st.write("No historical data available for summary.")
         summary_metrics = {}
 
-    # Recommendation (Separate Heading)
+    # Recommendation
     st.header("Recommendation")
     if not df.empty:
-        # Use the metrics calculated above
-        recommendation = generate_recommendation(ticker, current_price, avg_close, recent_volatility, current_rsi, price_trend, support_level, resistance_level)
-        st.markdown(recommendation)
+        # Load AI-generated recommendation directly as a dictionary
+        recommendation_file = os.path.join(FORECASTS_DIR, "recommendations.json")
+        recommendation = "No recommendation available."
+        if os.path.exists(recommendation_file):
+            try:
+                with open(recommendation_file, 'r') as f:
+                    import json
+                    recommendations = json.load(f)
+                if ticker in recommendations:
+                    recommendation = recommendations[ticker]
+                    # Parse recommendation into bullet points
+                    lines = recommendation.split('\n\n')
+                    if len(lines) >= 2:
+                        market_summary = lines[0].replace("**Market Trend Summary:** ", "")
+                        rec_action = lines[1].replace("**Recommendation:** ", "")
+                        st.markdown(f"- **Market Trend Summary:** {market_summary}")
+                        st.markdown(f"- **Recommendation:** {rec_action}")
+                    else:
+                        st.markdown(f"- {recommendation}")
+                else:
+                    st.markdown(f"- No recommendation found for {ticker}.")
+            except Exception as e:
+                st.markdown(f"- Error loading recommendation for {ticker}: {e}")
+        else:
+            st.markdown("- No recommendation available.")
     else:
-        st.write("No historical data available for generating a recommendation.")
+        st.markdown("- No historical data available for generating a recommendation.")
         recommendation = "No recommendation available due to lack of historical data."
 
     # Individual January 2025 Forecasts (Only for the Selected Ticker)
@@ -586,13 +675,13 @@ def show_dashboard():
         st.dataframe(forecast_display_df[['date', 'forecasted_close']], use_container_width=True)
         
         # Plot historical vs forecast with confidence intervals
-        if not df.empty:
-            historical_df = df.tail(60)[['date', 'close']].copy()
-            historical_df['type'] = 'Historical'
+        if not df.empty and 'close' in df.columns:
+            historical_df_plot = df.tail(60)[['date', 'close']].copy()
+            historical_df_plot['type'] = 'Historical'
             forecast_df['type'] = 'Forecast'
             # Combine historical and forecast data
             combined_df = pd.concat([
-                historical_df.rename(columns={'close': 'price'}),
+                historical_df_plot.rename(columns={'close': 'price'}),
                 forecast_df.rename(columns={'forecasted_close': 'price'})
             ])
             # Add confidence intervals (±5%)
@@ -604,8 +693,8 @@ def show_dashboard():
             fig = go.Figure()
             # Historical data
             fig.add_trace(go.Scatter(
-                x=historical_df['date'],
-                y=historical_df['close'],
+                x=historical_df_plot['date'],
+                y=historical_df_plot['close'],
                 mode='lines',
                 name='Historical',
                 line=dict(color='blue')
@@ -664,17 +753,17 @@ def show_dashboard():
     # Create a combined DataFrame for the table
     combined_forecast_df = pd.DataFrame()
     forecast_dfs = []
-    colors = ['orange', 'green', 'red', 'purple', 'yellow']  # Colors for each ticker
+    colors = ['orange', 'green', 'red', 'purple', 'yellow', 'blue', 'pink']  # Colors for each ticker
     
     for t in TICKERS:
         file_path = os.path.join(FORECASTS_DIR, f"{t}_jan2025_forecast.csv")
         if os.path.exists(file_path):
-            df = pd.read_csv(file_path)
-            df['date'] = pd.to_datetime(df['date'])
-            df['ticker'] = t
-            forecast_dfs.append(df)
+            df_forecast = pd.read_csv(file_path)
+            df_forecast['date'] = pd.to_datetime(df_forecast['date'])
+            df_forecast['ticker'] = t
+            forecast_dfs.append(df_forecast)
             # Rename the forecasted_close column to the ticker name for the combined table
-            df_ticker = df[['date', 'forecasted_close']].rename(columns={'forecasted_close': t})
+            df_ticker = df_forecast[['date', 'forecasted_close']].rename(columns={'forecasted_close': t})
             if combined_forecast_df.empty:
                 combined_forecast_df = df_ticker
             else:
@@ -692,12 +781,12 @@ def show_dashboard():
         st.subheader("Combined Forecast Graph")
         st.markdown("**Explanation:** This graph compares the forecasted closing prices for all selected tickers in January 2025, allowing you to see how different stocks are expected to perform relative to each other.")
         fig = go.Figure()
-        for i, df in enumerate(forecast_dfs):
+        for i, df_forecast in enumerate(forecast_dfs):
             fig.add_trace(go.Scatter(
-                x=df['date'],
-                y=df['forecasted_close'],
+                x=df_forecast['date'],
+                y=df_forecast['forecasted_close'],
                 mode='lines',
-                name=df['ticker'].iloc[0],
+                name=df_forecast['ticker'].iloc[0],
                 line=dict(color=colors[i % len(colors)])
             ))
         fig.update_layout(
@@ -767,11 +856,11 @@ def show_dashboard():
                 pros.append("✅ Low volatility (stable forecast)")
             # Cons
             if stats['change_percent'] < -5:
-                cons.append("⚠️ Notable downward trend")
+                cons.append("⚠ Notable downward trend")
             if stats['average'] == avg_prices[lowest_avg_ticker]:
-                cons.append("⚠️ Lowest average forecast")
+                cons.append("⚠ Lowest average forecast")
             if stats['range'] > 10:
-                cons.append("⚠️ High volatility (risky forecast)")
+                cons.append("⚠ High volatility (risky forecast)")
             # If no pros or cons, add a neutral comment
             if not pros:
                 pros.append("No significant pros")
@@ -797,7 +886,77 @@ def show_dashboard():
     else:
         st.warning("No forecast data available for comparison. Please run the training and forecasting step for all tickers.")
 
-    # Download PDF Report
+    # Sector Comparison
+    st.header("Sector Comparison")
+    st.markdown("**Explanation:** This section compares key metrics across different sectors (Tech, Finance, Sportswear) to help you understand sector-level performance trends.")
+    analytics_file = os.path.join(FORECASTS_DIR, "analytics_and_forecasts.json")
+    if os.path.exists(analytics_file):
+        try:
+            with open(analytics_file, 'r') as f:
+                import json
+                analytics_data = json.load(f)
+            if 'sector_analytics' in analytics_data:
+                sector_analytics = analytics_data['sector_analytics']
+                st.subheader("Sector-Level Metrics")
+                sector_data = []
+                for sector, metrics in sector_analytics.items():
+                    sector_data.append([
+                        sector,
+                        ", ".join(metrics['tickers']),
+                        f"{metrics['average_2020_growth']:.2f}%",
+                        f"{metrics['average_price_trend']:.2f}%",
+                        f"${metrics['average_closing_price']:.2f}"
+                    ])
+                sector_df = pd.DataFrame(sector_data, columns=[
+                    "Sector", "Tickers", "Average 2020 Growth", "Average Price Trend (Last 30 Days)", "Average Closing Price (Last 60 Days)"
+                ])
+                st.table(sector_df)
+
+                # Plot sector comparisons
+                st.subheader("Sector Comparison Graphs")
+                # Bar chart for average 2020 growth
+                fig_growth = px.bar(
+                    sector_df,
+                    x="Sector",
+                    y="Average 2020 Growth",
+                    title="Average 2020 Growth by Sector",
+                    text="Average 2020 Growth",
+                    template="plotly_dark"
+                )
+                fig_growth.update_traces(texttemplate='%{text}', textposition='auto')
+                st.plotly_chart(fig_growth)
+
+                # Bar chart for average price trend
+                fig_trend = px.bar(
+                    sector_df,
+                    x="Sector",
+                    y="Average Price Trend (Last 30 Days)",
+                    title="Average Price Trend (Last 30 Days) by Sector",
+                    text="Average Price Trend (Last 30 Days)",
+                    template="plotly_dark"
+                )
+                fig_trend.update_traces(texttemplate='%{text}', textposition='auto')
+                st.plotly_chart(fig_trend)
+
+                # Bar chart for average closing price
+                fig_price = px.bar(
+                    sector_df,
+                    x="Sector",
+                    y="Average Closing Price (Last 60 Days)",
+                    title="Average Closing Price (Last 60 Days) by Sector",
+                    text="Average Closing Price (Last 60 Days)",
+                    template="plotly_dark"
+                )
+                fig_price.update_traces(texttemplate='%{text}', textposition='auto')
+                st.plotly_chart(fig_price)
+            else:
+                st.warning("No sector analytics data available. Please run 'Collect Stock Data' to generate analytics.")
+        except Exception as e:
+            st.error(f"Error loading sector analytics: {e}")
+    else:
+        st.warning("No sector analytics data available. Please run 'Collect Stock Data' to generate analytics.")
+
+    # Download PDF Report (Updated Description)
     st.header("Download PDF Report")
     st.markdown("""
     **What’s Included in the Report:**
@@ -805,10 +964,19 @@ def show_dashboard():
     - Historical Summary: Key metrics like average closing price, volatility, RSI, price trend, and support/resistance levels.
     - Recommendation: A suggested action (buy, sell, or hold) based on the historical analysis.
     - January 2025 Forecast: A table of predicted closing prices for the selected ticker.
+    - Forecast vs. Real Data Comparison: A table comparing forecasted and actual closing prices.
     """)
     if st.button("Generate and Download PDF Report"):
-        if not df.empty and not forecast_df.empty:
-            pdf_buffer = generate_pdf_report(ticker, df, summary_metrics, recommendation, forecast_df)
+        # Load historical data again to ensure df is correct
+        historical_file_path = os.path.join(DATA_DIR, f"{ticker}_stock_data.csv")
+        if os.path.exists(historical_file_path):
+            historical_df = pd.read_csv(historical_file_path)
+            historical_df["date"] = pd.to_datetime(historical_df["date"])
+        else:
+            historical_df = pd.DataFrame()
+        
+        if not historical_df.empty and not forecast_df.empty:
+            pdf_buffer = generate_pdf_report(ticker, historical_df, summary_metrics, recommendation, forecast_df)
             st.download_button(
                 label="Click to download",
                 data=pdf_buffer,

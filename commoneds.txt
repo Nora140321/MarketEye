@@ -1,6 +1,6 @@
-cd C:\Users\algha\OneDrive\Documents\Market_Eye\api
+cd C:\Users\algha\OneDrive\Documents\Market_Eye
+>> .venv\Scripts\activate
 
-uvicorn main:app --reload
 
-& "C:\Users\algha\OneDrive\Documents\Market_Eye\.venv\Scripts\activate.bat"
-streamlit run app.py
+cd C:\Users\algha\OneDrive\Documents\Market_Eye\frontend
+>> streamlit run app.py
